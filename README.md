@@ -1,5 +1,5 @@
-#Credit Card Customer Churn Prediction
-##Executive summary
+# Credit Card Customer Churn Prediction
+## Executive summary
 1. Problem
 Assume that we are a group of data analytics consultants hired by HSAC bank. Currently the credit 
 card department of HSAC bank is facing a very high customer churn rate, which means that an 
