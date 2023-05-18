@@ -1,6 +1,6 @@
 # Credit Card Customer Churn Prediction
 ## Executive summary
-1. Problem
+### 1. Problem
 Assume that we are a group of data analytics consultants hired by HSAC bank. Currently the credit 
 card department of HSAC bank is facing a very high customer churn rate, which means that an 
 increasing number of credit card holders have decided to close their credit card accounts. The 
@@ -12,7 +12,7 @@ In this report, we have adopted machine learning techniques to (1) find the opti
 to predict credit card customer churn and (2) uncover the most important variables leading to the 
 customer churn. We also proposed recommendations based on our research and findings.
 
-2. Principal findings
+### 2. Principal findings
 We fit the dataset to several machine learning models subsequent to the EDA and data-preprocessing. 
 Our machine learning includes (1) KNN, (2) SVM, (3) Logistic Regression, (4) Random Forest, (5) 
 Basic GBM, (6) Stochastic GBM, (7) XGBoost and (8) K-means. We generated the test AUC for each 
