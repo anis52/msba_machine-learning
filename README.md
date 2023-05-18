@@ -20,7 +20,7 @@ model. In conclusion, the optimal model is Stochastic GBM with the highest test 
 on the Stochastic GBM model, we find the top 2 most important variables, Total Transaction Count
 and Total Transaction Amount, for HSAC to investigate further and pay more attention to.
 
-3. Recommendations
+### 3. Recommendations
 Last but not least, we proposed recommendations for HSAC to both predict and prevent customer churn. 
 In terms of prediction, we suggest HSAC to proactively and closely monitor customer activities and 
 pay special attention to the 2 most important variables on a timely basis.
