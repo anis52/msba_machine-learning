@@ -1,0 +1,785 @@
+---
+title: "GP"
+author: "Group3"
+date: "2021/12/14"
+output: pdf_document
+---
+
+```{r}
+# read data
+library(dplyr)
+customer <- read.csv("BankChurners.csv")
+customer
+```
+
+
+# 0 Data pre-processing
+```{r}
+# read data
+library(dplyr)
+library(corrplot)
+customer <- read.csv("BankChurners.csv")
+
+# remove 3 irrelevant variables
+customers <- customer %>% 
+  select(-c(CLIENTNUM, 
+            Naive_Bayes_Classifier_Attrition_Flag_Card_Category_Contacts_Count_12_mon_Dependent_count_Education_Level_Months_Inactive_12_mon_1,
+            Naive_Bayes_Classifier_Attrition_Flag_Card_Category_Contacts_Count_12_mon_Dependent_count_Education_Level_Months_Inactive_12_mon_2))
+
+```
+
+```{r}
+# correlation plot
+customers %>% select(where(is.numeric)) %>% as.matrix() %>%
+cor() %>% corrplot(method = "color",shade.col = NA, tl.col ="black", tl.srt = 90, order = "AOE",tl.cex=0.5,number.cex=0.5,addCoef.col = "grey")
+
+# remove 1 collinear variable
+customers <- customers %>% 
+  select(-c(Avg_Open_To_Buy))
+```
+
+```{r}
+# define order level of ordinal categorical variables
+customers$Education_Level= factor(customers$Education_Level, levels=c("Uneducated", "High School", "College","Graduate","Post-Graduate","Doctorate","Unknown"),order=T)
+
+customers$Income_Category= factor(customers$Income_Category, levels=c("Less than $40K", "$40K - $60K", "$60K - $80K", "$80K - $120K", "$120K +","Unknown"),order=T)
+
+customers$Card_Category= factor(customers$Card_Category, levels=c("Blue", "Silver", "Gold", "Platinum"),order=T)
+
+# define binary variable
+customers$Gender = as.factor(ifelse(customers$Gender == "M",0,1))
+
+# define response variable
+customers$Attrition_Flag = as.factor(ifelse(customers$Attrition_Flag == "Existing Customer", 1, 0))
+
+```
+
+```{r}
+# split into train & test set
+library(recipes)
+set.seed(123) 
+
+split  <- rsample::initial_split(customers, prop = 0.7) 
+train <- rsample::training(split) 
+test <- rsample::testing(split) 
+```
+
+```{r}
+# feature engineering blueprint
+blueprint<-recipe(Attrition_Flag~.,data=train)%>%
+  step_nzv(all_nominal())%>%
+  step_center(all_numeric(), -all_outcomes()) %>%
+  step_scale(all_numeric(), -all_outcomes())%>%
+  step_integer(matches("Education_Level|Income_Category|Card_Category")) %>%
+  step_dummy(matches("Marital_Status")) 
+  prepare <- prep(blueprint, training = train) 
+
+customers.train <- bake(prepare, new_data = train) 
+customers.test <- bake(prepare, new_data = test)
+
+customers.train$Gender<-as.factor(customers.train$Gender) 
+customers.train$Education_Level<-as.factor(customers.train$Education_Level) 
+customers.train$Income_Category<-as.factor(customers.train$Income_Category) 
+customers.train$Card_Category<-as.factor(customers.train$Card_Category)
+customers.test$Gender<-as.factor(customers.test$Gender) 
+customers.test$Education_Level<-as.factor(customers.test$Education_Level) 
+customers.test$Income_Category<-as.factor(customers.test$Income_Category) 
+customers.test$Card_Category<-as.factor(customers.test$Card_Category)
+```
+
+```{r}
+#no. of existing(1)/attrited(0) customers before smote
+table(customers.train$Attrition_Flag)
+```
+
+# SMOTE
+
+```{r}
+#SMOTE FOR ---tree based model---
+#smote to deal with imbalanced data
+#smoted to around 1:1
+library(performanceEstimation)
+set.seed(123)
+customers.train.smd1<-smote(Attrition_Flag~., customers.train, perc.over = 4, k=5, perc.under = 1.3)
+customers.smoted1<-customers.train.smd1
+```
+
+```{r}
+table(customers.smoted1$Attrition_Flag)
+```
+
+```{r}
+#SMOTE FOR ---SVM---
+#smote to deal with imbalanced data
+#reduced total sample size by considering the svm running time
+library(performanceEstimation)
+set.seed(123)
+customers.train.smd2<-smote(Attrition_Flag~., customers.train, perc.over = 1, k=5, perc.under = 2)
+customers.smoted2<-customers.train.smd2
+```
+
+# logistic
+
+```{r}
+#Smoothing Spline for Logistic regression
+library(gam) #load package
+#fit logistic regression model
+fit_log <- glm(Attrition_Flag ~.,family = binomial(logit), data = customers.smoted1[,-c(1,17)])
+summary(fit_log)
+library(caret)
+```
+
+```{r, eval = FALSE}
+#training accuracy
+pred_glm_train<- predict(fit_log, newdata = customers.smoted1[,-c(1,17)],type='response')
+pred_glm_train<-factor(ifelse(pred_glm_train<0.5,0,1))
+confusionMatrix(pred_glm_train,customers.smoted1$Attrition_Flag)
+```
+```{r}
+#testing accuracy
+pred_glm_test<- predict(fit_log, newdata = customers.test[,-c(1,17)],type='response')
+pred_glm_test<-factor(ifelse(pred_glm_test<0.5,0,1))
+confusionMatrix(pred_glm_test,customers.test$Attrition_Flag)
+```
+
+# KNN
+
+```{r}
+library(caret)
+set.seed(123)
+knn_fit <- train(
+  Attrition_Flag~., data = customers.smoted1, method = "knn",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 10
+  )
+```
+
+```{r}
+# Plot model error RMSE vs different values of k
+plot(knn_fit)
+# Best tuning parameter k that minimize the RMSE
+knn_fit$bestTune
+```
+
+```{r}
+#training accuracy
+pred_knn_train <- knn_fit %>% predict(customers.smoted1)
+table(true=customers.smoted1$Attrition_Flag,predict=pred_knn_train)
+mean(pred_knn_train!= customers.smoted1$Attrition_Flag)
+1-mean(pred_knn_train!= customers.smoted1$Attrition_Flag)
+```
+
+
+```{r}
+# make predictions, show confusion matrix and testing accuracy
+pred_knn_test <- knn_fit %>% predict(customers.test)
+table(true=customers.test$Attrition_Flag,predict=pred_knn_test)
+mean(pred_knn_test!= customers.test$Attrition_Flag)
+1-mean(pred_knn_test!= customers.test$Attrition_Flag)
+```
+
+
+# SVM
+
+```{r}
+#tune the parameter of linear kernel
+library(e1071)
+set.seed(999)
+tune.out<-tune(svm,Attrition_Flag~.,data=customers.smoted2,kernel='linear',ranges=list(cost=c(0.01,0.1,1,10)))
+summary(tune.out)
+```
+
+```{r}
+#tune the parameter of radial kernel
+library(e1071)
+set.seed(123)
+tune.out2<-tune(svm,Attrition_Flag~.,data=customers.smoted2,kernel='radial',ranges=list(cost=c(0.01, 0.1, 1, 10),gamma=c(0.01,0.1,0.5,1,2)))
+summary(tune.out2)
+```
+
+
+```{r}
+#tune the parameter of polynomial kernel
+library(e1071)
+set.seed(123)
+tune.out3<-tune(svm,Attrition_Flag~.,data=customers.smoted2, kernel='polynomial',ranges=list(cost=c(0.01, 0.1, 1, 10, 100),degree=c(1,2,3,4,5,6)))
+summary(tune.out3)
+```
+
+```{r}
+#training accuracy
+pred_svm_train<- predict(tune.out3, data = customers.smoted2,type='response', verbose = FALSE)$predictions
+confusionMatrix(pred_svm_train,customers.smoted2$Attrition_Flag)
+```
+
+```{r}
+#testing accuracy
+library(caret)
+pred_svm_test<- predict(tune.out3, data = customers.test,type='response', verbose = FALSE)$predictions
+confusionMatrix(pred_svm_test,customers.test$Attrition_Flag)
+```
+
+# RF
+
+```{r}
+#RF
+library(ranger)
+n_features <- length(setdiff(names(customers.smoted1),"Attrition_Flag"))
+hyper_grid <- expand.grid(
+  mtry = floor(n_features * c(.05,.15,.25,.333,.4)),
+  min.node.size = c(1,3,5,10),
+  replace=c(TRUE,FALSE),
+  sample.fraction = c(.5,.63,.8),
+  rmse = NA
+)
+#excecute full cartesian grid search
+for(i in seq_len(nrow(hyper_grid))) {
+  #fit model for ith hyperparameter combination
+  fit <- ranger(
+    formula = Attrition_Flag ~.,
+    data = customers.smoted1,
+    num.trees = n_features * 10,
+    mtry = hyper_grid$mtry[i],
+    min.node.size = hyper_grid$min.node.size[i],
+    replace = hyper_grid$replace[i],
+    sample.fraction = hyper_grid$sample.fraction[i],
+    verbose = FALSE,
+    seed = 233,
+    respect.unordered.factors = "order",
+  )
+  #export OOB error
+  hyper_grid$rmse[i] <- sqrt(fit$prediction.error)
+}
+```
+
+```{r}
+#model without tuning as baseline
+ames_rf1 <- ranger(
+  Attrition_Flag ~.,
+  data = customers.smoted1,
+  mtry = floor(n_features / 3),  #default set rule
+  respect.unordered.factors = "order",
+  seed = 123
+)
+#get OOB RMSE is 0.1067394
+(default_rmse <- sqrt(ames_rf1$prediction.error))
+#assess top 10 models
+hyper_grid %>%
+  arrange(rmse) %>%
+  mutate(perc_gain = (default_rmse - rmse) / default_rmse * 100) %>%
+  head(10)
+#so the best tuning parameter is mtry = 3(near the number of features/3) & min.node.size = 1 (the less deep tree performs better)& replace = FALSE & sample.fraction = 0.63
+
+#feature interpretetion
+#rerun model with impurity-based variable importance
+library(vip)
+library(ranger)
+rf_impurity <- ranger(
+    formula = Attrition_Flag ~.,
+    data = customers.smoted1,
+    num.trees = n_features * 10,
+    mtry = 3,
+    min.node.size = 1,
+    replace = FALSE,
+    importance = "impurity", #use impurity approach to estimate importance
+    sample.fraction = 0.63,
+    verbose = FALSE,
+    seed = 233,
+    respect.unordered.factors = "order",
+  )
+p_rf <- vip::vip(rf_impurity, num_features = n_features, scale=TRUE)
+gridExtra::grid.arrange(p_rf)
+#according to the importance, the most important predictors are Total_Trans_Amt.......
+```
+
+```{r}
+library(caret)
+library(vip)
+library(ranger)
+rf_impurity <- ranger(
+    formula = Attrition_Flag ~.,
+    data = customers.smoted1,
+    num.trees = n_features * 10,
+    mtry = 3,
+    min.node.size = 1,
+    replace = FALSE,
+    importance = "impurity", #use impurity approach to estimate importance
+    sample.fraction = 0.63,
+    verbose = FALSE,
+    seed = 233,
+    respect.unordered.factors = "order",
+  )
+```
+```{r}
+#training accuracy
+pred_rf_train<- predict(rf_impurity, data = customers.smoted1,type='response', verbose = FALSE)$predictions
+confusionMatrix(pred_rf_train,customers.smoted1$Attrition_Flag)
+```
+
+```{r}
+#testing accuracy
+pred_rf_test<- predict(rf_impurity, data = customers.test,type='response', verbose = FALSE)$predictions
+confusionMatrix(pred_rf_test,customers.test$Attrition_Flag)
+```
+
+# Basic GBM
+
+```{r}
+#Basic GBM
+library(gbm)
+#tuning parameters
+#create grid search to seek the optimal learning rate or shrinkage. 
+hyper_grid2 <- expand.grid(
+  learning_rate = c(0.3,0.1,0.05,0.01,0.005),
+  RMSE= NA,
+  trees=NA
+)
+#execute grid search
+for (i in seq_len(nrow(hyper_grid2))){
+  #fix gbm
+  set.seed(233)
+  m <- gbm(
+    formula = Attrition_Flag ~.,
+    data = customers.smoted1,
+    distribution = "bernoulli",
+    n.trees = 5000,
+    shrinkage = hyper_grid2$learning_rate[i],
+    interaction.depth = 3,
+    n.minobsinnode = 10,
+    cv.folds = 10
+  )
+  
+  #add SSE, trees
+  hyper_grid2$RMSE[i] <- sqrt(min(m$cv.error))
+  hyper_grid2$trees[i] <- which.min(m$cv.error)
+}
+
+```
+
+```{r}
+#results and choose optimal learning rate parameters
+arrange(hyper_grid2,RMSE)
+#so, the optimal learning rate is 0.05. And requires 4876 trees. 
+```
+
+```{r}
+#under this learning rate, create grid search to seek the optimal number of trees, interaction depth and number of minimum node. 
+hyper_grid3 <- expand.grid(
+  n.trees = 4876,
+  shrinkage = 0.05,
+  interaction.depth = c(3,5,7),
+  n.minobsinnode = c(5,10,15)
+)
+
+```
+
+```{r}
+#create model fit function, take 4 GBM parameters input and return RMSE
+model_fit <- function(n.trees, shrinkage, interaction.depth, n.minobsinnode){
+  set.seed(233)
+  m<-gbm(
+    formula = Attrition_Flag ~.,
+    data = customers.smoted1,
+    distribution = "bernoulli",
+    n.trees = n.trees,
+    shrinkage = shrinkage,
+    interaction.depth = interaction.depth,
+    n.minobsinnode = n.minobsinnode,
+    cv.folds = 10
+  )
+  #compute RMSE
+  sqrt(min(m$cv.error))
+}
+#perform search grid with functional programming
+hyper_grid3$rmse <- purrr::pmap_dbl(
+  hyper_grid3,
+  ~model_fit(
+    n.trees = ..1,
+    shrinkage = ..2,
+    interaction.depth = ..3,
+    n.minobsinnode = ..4
+  )
+)
+
+#display the results and choose the optimal depth and minnode parameters. 
+arrange(hyper_grid3,rmse)
+#so the optimal interaction.depth = 7, n.minobsinnode = 15, n.trees = 4876,rmse =0.2441435
+```
+
+```{r}
+library(gbm)
+bgbm <- gbm(
+    formula = as.character(Attrition_Flag) ~.,
+    data = customers.smoted1,
+    distribution = "bernoulli",
+    n.trees = 4876,
+    shrinkage = 0.05,
+    interaction.depth = 7,
+    n.minobsinnode = 15,
+    cv.folds = 10
+  )
+```
+
+```{r}
+#training accuracy
+pred_bgbm_train<- predict(bgbm, newdata = customers.smoted1,verbose = FALSE)
+pred_bgbm_train<-ifelse(pred_bgbm_train<0.5,0,1)
+library(caret)
+confusionMatrix(factor(pred_bgbm_train),customers.smoted1$Attrition_Flag)
+p_bgbm <- vip::vip(bgbm, scale=TRUE)
+gridExtra::grid.arrange(p_bgbm)
+#most important : Total_Trans_Ct , Total_Trans_Amt, Total_Revolving_Bal...
+```
+```{r}
+#testing gbm
+pred_bgbm_test<- predict(bgbm, newdata = customers.test,verbose = FALSE)
+pred_bgbm_test<-ifelse(pred_bgbm_test<0.5,0,1)
+library(caret)
+confusionMatrix(factor(pred_bgbm_test),customers.test$Attrition_Flag)
+```
+
+# Stochastic GBM
+```{r}
+library(gbm)
+library(caret)
+library(purrr)
+#Stochastic GBM
+#bag fraction ranging from 0.5-0.8
+hyper_grid_sto <- expand.grid(
+  n.trees = 4876,
+  shrinkage = 0.05,
+  bag.fraction = c(0.5,0.6,0.7,0.8),
+  interaction.depth = 7,
+  n.minobsinnode = 15
+)
+
+sto_fit <- function(n.trees, shrinkage, bag.fraction,interaction.depth,n.minobsinnode){
+  set.seed(233)
+  gbm_sto<-gbm(
+    formula = as.character(Attrition_Flag) ~.,
+    data = customers.smoted1,
+    distribution = "bernoulli",
+    n.trees = n.trees,
+    shrinkage = shrinkage,
+    bag.fraction = bag.fraction,
+    interaction.depth = interaction.depth,
+    n.minobsinnode = n.minobsinnode,
+    cv.folds = 10
+  )
+  #compute RMSE
+  sqrt(min(gbm_sto$cv.error))
+}
+
+
+#perform search grid with functional programming
+hyper_grid_sto$rmse <- purrr::pmap_dbl(
+  hyper_grid_sto,
+  ~sto_fit(
+    n.trees = ..1,
+    shrinkage = ..2,
+    bag.fraction = ..3,
+    interaction.depth = ..4,
+    n.minobsinnode = ..5
+  )
+)
+
+#display the results and choose the optimal depth and minnode parameters. 
+arrange(hyper_grid_sto,rmse)
+```
+
+```{r}
+library(gbm)
+library(caret)
+library(purrr)
+sgbm <- gbm(
+    formula = as.character(Attrition_Flag) ~.,
+    data = customers.smoted1,
+    distribution = "bernoulli",
+    n.trees = 4876,
+    shrinkage = 0.05,
+    interaction.depth = 7,
+    n.minobsinnode = 15,
+    cv.folds = 10,
+    bag.fraction = 0.5
+  )
+```
+
+```{r}
+#training accuracy
+pred_sgbm_train<- predict(sgbm, newdata = customers.smoted1,type='response',verbose = FALSE)
+pred_sgbm_train<-ifelse(pred_sgbm_train<0.5,0,1)
+library(caret)
+confusionMatrix(factor(pred_sgbm_train),customers.smoted1$Attrition_Flag)
+```
+
+```{r}
+#testing accuracy
+pred_sgbm_test<- predict(sgbm, newdata = customers.test,type='response',verbose = FALSE)
+pred_sgbm_test<-ifelse(pred_sgbm_test<0.5,0,1)
+library(caret)
+confusionMatrix(factor(pred_sgbm_test),customers.test$Attrition_Flag)
+```
+
+```{r}
+library(proc)
+library("RColorBrewer")
+set.seed(233)
+pred_fun = function(X.model, newdata) {
+  predict(X.model, newdata)
+}
+p_sgbm <- vip::vip(object = sgbm, method = "permute", target = "Attrition_Flag", metric = "auc", pred_wrapper = pred_fun, newdata=data.matrix(customers.smoted1[,-18]),reference_class = 1, aesthetics = list(fill = brewer.pal(n=10,name = "PRGn")[1:10],border=NA) ,all_permutations = TRUE, jitter = TRUE)
+gridExtra::grid.arrange(p_sgbm)
+```
+
+```{r}
+#pdp
+library(dplyr)
+library(pdp)
+library(ggplot2)
+partial(sgbm,pred.var = "Total_Trans_Ct", train = customers.smoted1[,-18],n.trees=4876) %>% autoplot(size = 0.8) + geom_point(colour = brewer.pal(n=20,"PRGn")[3],size = 2.5)+scale_x_continuous(breaks=seq(-2.5,3.5,0.5))+ theme_bw()+ geom_smooth() 
+partial(sgbm,pred.var = "Total_Trans_Amt", train = customers.smoted1[,-18],n.trees=4876) %>% autoplot(size = 0.8)+ geom_point(colour = brewer.pal(n=20,"PRGn")[3],size = 2.5)+scale_x_continuous(breaks=seq(-1.5,4,0.5))+theme_bw()+ geom_smooth()
+```
+
+#XGBOOST
+
+```{r}
+#XGBoost (based on basic GBM)
+library(xgboost)
+x <- data.matrix(customers.smoted1[setdiff(names(customers.smoted1),"Attrition_Flag")])
+y <- data.matrix(customers.smoted1$Attrition_Flag)
+dtrain <- xgb.DMatrix(x,label = y)
+```
+
+
+```{r}
+set.seed(233)
+ames_xgb <- xgb.cv(
+  data = dtrain,
+  nrounds = 4876,
+  objective = "binary:logistic",
+  early_stopping_rounds = 50,
+  nfold = 10,
+  params = list(
+    eta = 0.05,
+    max_depth = 7,
+    min_child_weight = 15,
+    subsample = 0.5,
+    colsample_bytree = 0.5),
+  verbose = 0
+)
+#minimum test cv RMSE
+min(ames_xgb$evaluation_log$test_logloss_mean)
+```
+
+```{r}
+#hyperparameter grid
+hyper_grid4 <- expand.grid(
+  eta = 0.05,
+  max_depth = 7,
+  min_child_weight = 15,
+  subsample = 0.5,
+  colsample_bytree = 0.5,
+  gamma = c(0,1,10,100),
+  lambda = c(0,1e-2,0.1,1,100),
+  alpha = c(0,1e-2,0.1,1,100),
+  rmse = 0,
+  trees = 0
+)
+
+```
+
+```{r}
+#grid search
+for(i in seq_len(nrow(hyper_grid4))) {
+  set.seed(233)
+  m <- xgb.cv(
+    data = x,
+    label = y,
+    nrounds = 4876,
+    objective = "binary:logistic",
+    early_stopping_rounds = 50,
+    nfold = 10,
+    verbose = 0,
+    params = list(
+      eta = hyper_grid4$eta[i],
+      max_depth = hyper_grid4$max_depth[i],
+      min_child_weight = hyper_grid4$min_child_weight[i],
+      subsample = hyper_grid4$subsample[i],
+      colsample_bytree = hyper_grid4$colsample_bytree[i],
+      gamma = hyper_grid4$gamma[i],
+      lambda = hyper_grid4$lambda[i],
+      alpha = hyper_grid4$alpha[i]
+  )
+  )
+  hyper_grid4$rmse[i] <- min(m$evaluation_log$test_logloss_mean)
+  hyper_grid4$trees[i] <- m$best_iteration
+}
+```
+
+```{r}
+#display the results and choose the optimal depth and minnode parameters. 
+arrange(hyper_grid4,rmse)
+#so the optimal gamma = 0, lambda = 1e+0, alpha = 0e+0, trees = 788, eta = 0.1, max_depth = 7,min_child_weight=5
+```
+
+```{r}
+library(xgboost)
+xgb1 <- xgboost(
+    data = x,
+    label = y,
+    nrounds = 2584,
+    objective = "binary:logistic",
+    early_stopping_rounds = 50,
+    nfold = 10,
+    verbose = 0,
+    params = list(
+      eta = 0.05,
+      max_depth = 7,
+      min_child_weight = 15,
+      subsample = 0.5,
+      colsample_bytree = 0.5,
+      gamma = 0,
+      lambda = 1e-02,
+      alpha = 0e+00))
+```
+
+```{r}
+#training accuracy
+pred_xgb_train<-predict(xgb1, newdata = data.matrix(customers.smoted1[,-18]),type='response',verbose = FALSE)
+pred_xgb_train<-ifelse(pred_xgb_train<0.5,0,1)
+confusionMatrix(factor(pred_xgb_train),customers.smoted1$Attrition_Flag)
+```
+
+```{r}
+#testing accuracy
+pred_xgb_test<-predict(xgb1, newdata = data.matrix(customers.test[,-18]),type='response',verbose = FALSE)
+pred_xgb_test<-ifelse(pred_xgb_test<0.5,0,1)
+confusionMatrix(factor(pred_xgb_test),customers.test$Attrition_Flag)
+```
+
+```{r}
+#important features
+library(caret)
+p_xgb <- vip::vip(xgb1, scale=TRUE)
+gridExtra::grid.arrange(p_xgb)
+```
+
+```{r}
+#pdps for xgboost
+library(dplyr)
+library(pdp)
+library(ggplot2)
+partial(xgb1,pred.var = "Total_Trans_Amt", train = customers.smoted1[,-18]) %>% autoplot()
+partial(xgb1,pred.var = "Total_Trans_Ct", train = customers.smoted1[,-18]) %>% autoplot()
+partial(xgb1,pred.var = "Total_Ct_Chng_Q4_Q1", train = customers.smoted1[,-18]) %>% autoplot()
+partial(xgb1,pred.var = "Total_Revolving_Bal", train = customers.smoted1[,-18]) %>% autoplot()
+```
+
+```{r}
+#ROC for training
+library(pROC)
+roc_rf_train <- roc(as.numeric(customers.smoted1$Attrition_Flag), as.numeric(pred_rf_train))
+roc_bgbm_train <- roc(as.numeric(customers.smoted1$Attrition_Flag), as.numeric(pred_bgbm_train))
+roc_sgbm_train <- roc(as.numeric(customers.smoted1$Attrition_Flag), as.numeric(pred_sgbm_train))
+roc_xgb_train <- roc(as.numeric(customers.smoted1$Attrition_Flag), as.numeric(pred_xgb_train))
+plot(roc_rf_train,col = "red")#draw the roc plots of the three model
+plot.roc(roc_bgbm_train, add = TRUE,col = "blue")
+plot.roc(roc_sgbm_train, add = TRUE, col = "green")
+plot.roc(roc_xgb_train, add = TRUE, col = "pink")
+roc_rf_train$auc#get the auc score of the three models
+roc_bgbm_train$auc
+roc_sgbm_train$auc
+roc_xgb_train$auc
+```
+
+```{r}
+#ROC for testing
+library(pROC)
+roc_rf_test <- roc(as.numeric(customers.test$Attrition_Flag), as.numeric(pred_rf_test))
+roc_bgbm_test <- roc(as.numeric(customers.test$Attrition_Flag), as.numeric(pred_bgbm_test))
+roc_sgbm_test <- roc(as.numeric(customers.test$Attrition_Flag), as.numeric(pred_sgbm_test))
+roc_xgb_ttest <- roc(as.numeric(customers.test$Attrition_Flag), as.numeric(pred_xgb_test))
+plot(roc_rf_test,col = "red")#draw the roc plots of the three model
+plot.roc(roc_bgbm_test, add = TRUE,col = "blue")
+plot.roc(roc_sgbm_test, add = TRUE, col = "green")
+plot.roc(roc_xgb_test, add = TRUE, col = "pink")
+roc_rf_test$auc#get the auc score of the three models
+roc_bgbm_test$auc
+roc_sgbm_test$auc
+roc_xgb_test$auc
+```
+
+# Kmeans
+
+```{r}
+library(tidyverse)
+# use kmeans to do clustering
+# determine optimal number of clusters
+
+# drop response and categorical columns
+customers.train.k3<-customers.smoted1[-c(18,2,4,5,6,19,20,21)]
+
+set.seed(1234)
+
+# function to compute total within-cluster sum of square 
+wss <- function(k) {
+  kmeans(customers.train.k3, k, nstart = 10 )$tot.withinss
+}
+
+# Compute and plot wss for k = 1 to k = 15
+k.values <- 1:15
+
+# extract wss for 2-15 clusters
+wss_values <- map_dbl(k.values, wss)
+
+plot(k.values, wss_values,
+       type="b", pch = 19, frame = FALSE, 
+       xlab="Number of clusters K",
+       ylab="Total within-clusters sum of squares")
+```
+
+```{r}
+# choose 6 as the optimal number of clusters.
+# use numeric columns to do kmeans clustering
+set.seed(123)
+res.km3 <- kmeans(customers.train.k3,centers = 6, nstart = 25)
+
+# label each cluster
+customers.train.k3$cluster<-as.factor(res.km3$cluster)
+customers.train.k3$Attrition_Flag<-as.factor(customers.smoted1$Attrition_Flag)
+
+# add back categorical columns
+customers.train.k3$Gender<-customers.smoted1$Gender
+customers.train.k3$Education_Level<-customers.smoted1$Education_Level
+customers.train.k3$Income_Category<-customers.smoted1$Income_Category
+customers.train.k3$Card_Category<-customers.smoted1$Card_Category
+customers.train.k3$Marital_Status_Married<-customers.smoted1$Marital_Status_Married
+customers.train.k3$Marital_Status_Single<-customers.smoted1$Marital_Status_Single
+customers.train.k3$Marital_Status_Unknown<-customers.smoted1$Marital_Status_Unknown
+```
+```{r}
+install.packages("cbar")
+library(cbar)
+```
+
+```{r}
+# destandardize numeric columns for better interpretation
+customers.train.k3$Customer_Age<-destandardized(customers.train.k3$Customer_Age,mean(train$Customer_Age),sd(train$Customer_Age))
+customers.train.k3$Dependent_count<-destandardized(customers.train.k3$Dependent_count,mean(train$Dependent_count),sd(train$Dependent_count))
+customers.train.k3$Months_on_book<-destandardized(customers.train.k3$Months_on_book,mean(train$Months_on_book),sd(train$Months_on_book))
+customers.train.k3$Total_Relationship_Count<-destandardized(customers.train.k3$Total_Relationship_Count,mean(train$Total_Relationship_Count),sd(train$Total_Relationship_Count))
+customers.train.k3$Months_Inactive_12_mon<-destandardized(customers.train.k3$Months_Inactive_12_mon,mean(train$Months_Inactive_12_mon),sd(train$Months_Inactive_12_mon))
+customers.train.k3$Contacts_Count_12_mon<-destandardized(customers.train.k3$Contacts_Count_12_mon,mean(train$Contacts_Count_12_mon),sd(train$Contacts_Count_12_mon))
+customers.train.k3$Credit_Limit<-destandardized(customers.train.k3$Credit_Limit,mean(train$Credit_Limit),sd(train$Credit_Limit))
+customers.train.k3$Total_Revolving_Bal<-destandardized(customers.train.k3$Total_Revolving_Bal,mean(train$Total_Revolving_Bal),sd(train$Total_Revolving_Bal))
+customers.train.k3$Total_Amt_Chng_Q4_Q1<-destandardized(customers.train.k3$Total_Amt_Chng_Q4_Q1,mean(train$Total_Amt_Chng_Q4_Q1),sd(train$Total_Amt_Chng_Q4_Q1))
+customers.train.k3$Total_Trans_Amt<-destandardized(customers.train.k3$Total_Trans_Amt,mean(train$Total_Trans_Amt),sd(train$Total_Trans_Amt))
+customers.train.k3$Total_Trans_Ct<-destandardized(customers.train.k3$Total_Trans_Ct,mean(train$Total_Trans_Ct),sd(train$Total_Trans_Ct))
+customers.train.k3$Total_Ct_Chng_Q4_Q1<-destandardized(customers.train.k3$Total_Ct_Chng_Q4_Q1,mean(train$Total_Ct_Chng_Q4_Q1),sd(train$Total_Ct_Chng_Q4_Q1))
+customers.train.k3$Avg_Utilization_Ratio<-destandardized(customers.train.k3$Avg_Utilization_Ratio,mean(train$Avg_Utilization_Ratio),sd(train$Avg_Utilization_Ratio))
+```
+
+```{r}
+#write cluster to csv
+#write.csv(customers.train.k3,"C:/Users/AniS/Desktop/MSBA/7027/pj/cluster1215.3.csv", row.names=FALSE)
+```
